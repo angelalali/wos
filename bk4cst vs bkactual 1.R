@@ -73,11 +73,13 @@ test <- alldf[[i]]
 #   print(i)
 # }
 
+#nfile stores how many files were read
+nfile <- length(alldf)
 
 #1) take out the quarter name column AND PF column from each file
 #2) adjourn the quarterly booking actual column from each quarter file by PID
 alldfR <- list() #this will store reduced versions of the data frames
-for(i in 1:length(alldf)){
+for(i in 1:nfile){
   print(i)
   #you'll get n data frames with the PID and booking amount for each quater within the fiscal year; n = number of files read
   temp <- alldf[[i]]
@@ -100,18 +102,20 @@ rm(temp)
 #merge all quarterly data into one table
 qtrlyActual <- Reduce(function(...) merge(..., by = 'PID', all = TRUE ), alldfR)
 
-#convert all NA's to zeros
-qtrlyActual[is.na(qtrlyActual)] <- 0
-#there is this symbole " - " that the file used to indicate zero, also need to replace that
-tobedeleted <- qtrlyActual$`Q4 FY2015`[2]
-qtrlyActual[qtrlyActual == tobedeleted] <- 0
-#finally, rid of spaces by replacing it w zeros
-qtrlyActual[qtrlyActual == ""] <- 0
+# #convert all NA's to zeros
+# qtrlyActual[is.na(qtrlyActual)] <- 0
+# #there is this symbole " - " that the file used to indicate zero, also need to replace that
+# qtrlyActual <- gsub()
+# 
+# tobedeleted <- qtrlyActual$`Q4 FY2015`[2]
+# qtrlyActual[qtrlyActual == tobedeleted] <- 0
+#finally, rid of spaces by replacing it w NA
+qtrlyActual[qtrlyActual == ""] <- NA
 
-#rid of rows that has actual bookings all 4 quarters; those are not of problem so no worries about them
-bkngOK <- subset(qtrlyActual, rowSums(qtrlyActual == 0) == 0)
+#rid of rows that has actual bookings all quarters; those are not of problem so no worries about them
+bkngOK <- subset(qtrlyActual, rowSums(qtrlyActual[, -1], na.rm = T) >= 50)
 # bkngOK <- subset(qtrlyActual, (rowSums(is.na(qtrlyActual)) + rowSums(qtrlyActual == 0)) == 0 )
-#qtrActFocus = quarterly actual booking for focus (the problematic ones)
+#qtrActFocus = quarterly actual booking for focus (the problematic ones): the ones that has total 3 yrs of booking less than 50
 qtrActFocus <- qtrlyActual[!(qtrlyActual$PID %in% bkngOK$PID),]
 
 # 
@@ -124,33 +128,6 @@ qtrActFocus <- qtrlyActual[!(qtrlyActual$PID %in% bkngOK$PID),]
 # missingQ234 <- subset(qtrActFocus, rowSums(qtrActFocus == 0) == 3 & qtrActFocus$`Q1 FY2015` != 0)
 # #now let's find the ones where Q1 & Q4 not missing, but Q2Q3 may both or either be missing
 # MissingNotQ1Q4 <- subset(qtrActFocus, rowSums(qtrActFocus == 0) > 0 & qtrActFocus$`Q4 FY2015` != 0 & qtrActFocus$`Q1 FY2015` != 0)
-#finally, we want to see which ones have not been getting booking at all for the year
-missingAll <- subset(qtrActFocus, rowSums(qtrActFocus[, -1]) < 20)
-
-
-
-#now let's work on the forecast file
-path <- '~/cisco/projects/suman WOS/data/booking forecast/'
-qtrlyForecast <- read.xlsx2(file = paste0(path, "CDO Raw Fcst $ Details PID Level.xlsx"), sheetIndex = 1, startRow = 2)
-
-#convert all NA's to zeros
-qtrlyForecast[is.na(qtrlyForecast)] <- 0
-#there is this symbole " - " that the file used to indicate zero, also need to replace that
-qtrlyForecast[qtrlyForecast == tobedeleted] <- 0
-#finally, rid of spaces by replacing it w zeros
-qtrlyForecast[qtrlyForecast == ""] <- 0
-
-#convert all columns, except the PID column (which is the first one), into numeric values
-qtrlyForecast[, -1] <- sapply(qtrlyForecast[, -1], function(x) as.numeric(as.character(x)))
-
-
-
-#now we combine the missingAll to the forecast file to see which ones have NOT been booked but still being forecasted
-noBking <- merge(missingAll, qtrlyForecast, by = "PID", all.x = T)
-noBkw4cast <- subset(noBking, rowSums(noBking[, 6:length(noBking)], na.rm = T) != 0)
-
-
-write.xlsx(noBkw4cast, file = "C:/Users/ali3/Documents/cisco/projects/suman WOS/analysis results/forecast without booking.xlsx", sheetName = 'noBkw4cast < 20', col.names = TRUE, row.names = FALSE, append = TRUE)
 
 
 
@@ -160,19 +137,100 @@ EoLnow <- read.csv(file = paste0(path, "9-25 Item_GLO_EOL_Data.csv"), stringsAsF
 
 # by default, the ID number is treated as numeric value; so change that
 EoLnow[1] <- sapply(EoLnow[1], function(x) as.character(x))
+#rid of extra lines
+EoLnow <- EoLnow[, !(names(EoLnow) %in% c("ORG", "ITEM_TYPE"))]
+names(EoLnow)
 
 
-#merge the EoL file with the forecast file w no booking
-EoLw4cast <- merge(noBkw4cast, EoLnow, by = "PID", all.x = T)
+#the file you'll write is:
+# resultFileName <- "C:/Users/ali3/Documents/cisco/projects/suman WOS/analysis results/3yr 4cast w bk 50.csv"
+resultDir <- "C:/Users/ali3/Documents/cisco/projects/suman WOS/analysis results/3 yr analysis/"
 
-#now find out which are the ones with no booking but actually are correctly identified as EoL
-EoLnoBk <- subset(EoLw4cast, !is.na(INVENTORY_ITEM_ID))
-write.xlsx(EoLnoBk, file = "C:/Users/ali3/Documents/cisco/projects/suman WOS/analysis results/forecast without booking.xlsx", sheetName = 'noBK is EoL', col.names = TRUE, row.names = FALSE, append = TRUE)
+#now we combine the qtrActFocus to the EoL file to see which ones are marked as EoL in these problematic ones; then those are safe (sorta)
+noBkwAllEoL <- merge(qtrActFocus, EoLnow, by = "PID", all.x = T, all.y = F)
+
+#and then get rid of the ones that DOES have EoL lable; these are the OK ones; but still nice to know
+noBkwEoL <- subset(noBkwAllEoL, !is.na(INVENTORY_ITEM_ID))
+#write the file
+#write.xlsx(noBkwEoL, file = resultFileName, sheetName = 'noBk wEoL', col.names = TRUE, row.names = FALSE, append = TRUE)
+write.csv(noBkwEoL, file = paste0(resultDir, 'noBkwEoL.csv'), row.names = F)
 
 
-#now, remove above sections from the rest; the left over ones are the ones w no booking, not identified as EoL, and still getting forecast
-noBKnotEoLw4cast <- subset(EoLw4cast, !(EoLw4cast$PID %in% EoLnoBk$PID))
-write.xlsx(noBKnotEoLw4cast, file = "C:/Users/ali3/Documents/cisco/projects/suman WOS/analysis results/forecast without booking.xlsx", sheetName = 'noBkw4cast notEoL', col.names = TRUE, row.names = FALSE, append = TRUE)
+#now filter out the OK ones, and you are left w the problematic ones; the ones that has no booking, and yet still NOT identified as EoL
+noBknoEoL <- subset(noBkwAllEoL, !(PID %in% EoLnoBk$PID))
+# write.xlsx(NoBknoEoL, 
+#            file = resultFileName, 
+#            sheetName = 'noBk noEoL', col.names = TRUE, row.names = FALSE, append = TRUE)
+write.csv(noBknoEoL, file = paste0(resultDir, 'noBknoEoL.csv'), row.names = F)
+
+
+#now let's work on the forecast file
+path <- '~/cisco/projects/suman WOS/data/booking forecast/'
+#qtrlyForecast <- read.xlsx2(file = paste0(path, "CDO Raw Fcst $ Details PID Level.xlsx"), sheetIndex = 1, startRow = 2)
+qtrlyForecast <- read.csv(file = paste0(path, "CDO Raw Fcst $ Details PID Level.csv"), stringsAsFactors = F, skip = 1)
+
+
+# #convert all NA's to zeros
+# qtrlyForecast[is.na(qtrlyForecast)] <- 0
+# #there is this symbole " - " that the file used to indicate zero, also need to replace that
+# qtrlyForecast[qtrlyForecast == tobedeleted] <- 0
+#finally, rid of spaces by replacing it w NA
+qtrlyForecast[qtrlyForecast == ""] <- NA
+
+# #convert all columns, except the PID column (which is the first one), into numeric values
+# qtrlyForecast[, -1] <- sapply(qtrlyForecast[, -1], function(x) as.numeric(as.character(x)))
+
+
+
+#finally, we have to map the ones w/o booking, no EoL lable, to the forecast; these are the ones that are supposed to be marked as EoL but not, so they are still getting forecasted
+noBknoEoLwAll4cast <- merge(noBknoEoL, qtrlyForecast, by = "PID", all.x = T, all.y = F)
+
+#there are some without booking, not labled as EoL, but has no forecast; take those out
+#so you are left with rows that has no booking, not labled as EoL, but still has forecast
+noBknoEolw4cast <- subset(noBknoEoLwAll4cast, 
+                           rowSums(is.na(noBknoEoLwAll4cast[,(1+nfile+2+1):length(noBknoEoLwAll4cast)])) < (length(qtrlyForecast)-1) )
+# write.xlsx(noBknoEolw4cast, file = resultFileName, 
+#            sheetName = 'noBk noEoL w4cast', col.names = TRUE, row.names = FALSE, append = TRUE)
+write.csv(noBknoEolw4cast, file = paste0(resultDir, 'noBknoEolw4cast.csv'), row.names = F)
+
+#filter out the above ones, and you'll get a list of PIDS with no booking, not labled as EoL, but also no forecast as well
+#could be a problem?
+noBknoEoLno4cast <- subset(noBknoEoLwAll4cast, !(PID %in% noBknoEolw4cast$PID))
+# write.xlsx(noBknoEolno4cast, file = resultFileName, 
+#            sheetName = 'noBk noEoL no4cast', col.names = TRUE, row.names = FALSE, append = TRUE)
+write.csv(noBknoEoLno4cast, file = paste0(resultDir, 'noBknoEolno4cast.csv'), row.names = F)
+
+
+#should also find out the ones with no booking, identified as EoL, but still has forecast
+noBkwEoLwAll4cast <- merge(noBkwEoL, qtrlyForecast, by = "PID", all.x = T, all.y = F)
+
+#need to filter out the ones that actually has no forecast
+noBkwEoLw4castIncludeZero <- subset(noBkwEoLwAll4cast, 
+                          rowSums(is.na(noBkwEoLwAll4cast[,(1+nfile+2+1):length(noBkwEoLwAll4cast)])) < (length(qtrlyForecast)-2) )
+write.csv(noBkwEoLw4castIncludeZero, file = paste0(resultDir, 'noBkwEoLw4castIncludeZero.csv'), row.names = F)
+
+#also find out a subset of above dataframe that contains no booking, labeled as EoL, but still have positive large (>50) booking
+noBkwEoLw4cast <- subset(noBkwEoLw4castIncludeZero, 
+                         rowSums((noBkwEoLw4castIncludeZero[,(1+nfile+2+1):length(noBkwEoLw4castIncludeZero)]), na.rm = T) > 50 )
+write.csv(noBkwEoLw4cast, file = paste0(resultDir, 'noBkwEoLw4cast.csv'), row.names = F)
+
+
+#we are also intersted in finding which bookings has actual bookings >=50 is actually listed as EoL with forecast
+bkwEoL <- merge(bkngOK, EoLnow, by = "PID")
+#do these ones have forecast as well?
+bkWEoLw4cast <- merge(bkwEoL, qtrlyForecast, by = "PID", all.x = T)
+#filter out the ones that actually has forecast
+bkWEoLw4cast <- bkWEoLw4cast <- subset(bkWEoLw4cast, 
+                                       rowSums(is.na(bkWEoLw4cast[,(1+nfile+2+1):length(bkWEoLw4cast)])) < (length(qtrlyForecast)-2) )
+
+#also need to find out booking >= 50, not labeled as EoL
+
+
+#next, we are goign to create a result table to show the numbers; otherwise just tables of data is not really helpful...
+result <- data.table(1,2,3,4,5,6,7,8)
+#then rename all the columns with following code
+#names(result) <- c("PF", "TAN", "as-is LAS", "to-be LAS", 'change in LAS', 'as-is OTS', 'to-be OTS', 'change in OTS')
+setnames(result, c("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"), c("PF", "TAN", "as-is LAS", "to-be LAS", 'change in LAS', 'as-is OTS', 'to-be OTS', 'change in OTS'))
 
 
 
